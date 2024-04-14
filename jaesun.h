@@ -7,7 +7,8 @@
 typedef struct pcObject pcObject;
 typedef struct pcArray  pcArray;
 
-enum pcType { pc_int, pc_float, pc_string, pc_ident, pc_object, pc_array };
+enum pcType { pc_int, pc_float, pc_string, pc_ident, pc_object, pc_array,
+              pc_ref };
 
 typedef struct 
 {
@@ -20,6 +21,7 @@ typedef struct
     char     *strv;
     pcObject *objv;
     pcArray  *arrv;
+    char    **refv;
   };
 } pcValue;
 
@@ -459,6 +461,7 @@ typedef struct lexer
     char *data;
     uint64_t intv;
     double   flov;
+    char   **refv;
   } token;
   unsigned int tokbufsize, tokbuflen;   
   unsigned int fileno;
@@ -480,7 +483,8 @@ enum { tk_int, tk_string, tk_float, tk_ident, tk_openc, tk_closec,
                                               tk_opens, tk_closes,
                                               tk_openr, tk_closer,
                                               tk_eof,   tk_error,
-                                              tk_semicolon };
+                                              tk_semicolon,
+       tk_ref };
 
 typedef struct
 {
@@ -664,9 +668,32 @@ static void     pcLexerCopyIdent(pcLexer *L)
 
 static int      pcLexerParseIdent(pcLexer *L)
 {
-  L->token.type= tk_ident;
+  int ncom;
   pcLexerCopyIdent(L);
-  return L->token.type;
+  if (L->C!='.') return L->token.type= tk_ident;
+  ncom= 1;
+dot:
+  ncom++;
+  pcLexerCopyNext(L);
+  if (!pcLexerIsIdentBegin(L))
+     return pcLexerError(L, "identifier expected in reference");
+  pcLexerCopyIdent(L);
+  if (L->C=='.') goto dot;
+
+  char **P, *d, *A;
+  A= malloc( (ncom+1)*sizeof(char*) + L->tokbuflen+1 );
+  d= A + (ncom+1)*sizeof(char*);
+  P= (void*) A;
+  strcpy(d, L->token.data);
+  L->token.refv= P;
+  while(d)
+  {
+    *P++= d;
+    d= strchr(d,'.'); // returns NULL for the last one.
+    if (d) *d++= 0;
+  }
+  *P= d;
+  return L->token.type= tk_ref;
 }
 
 static int      pcLexerParseSimple(pcLexer *L, int type)
@@ -743,7 +770,6 @@ retry:
 put_rest:
   pcLexerPutString(L, inp, -1);
 
-done:
   free(o_inp);
   return 0;
 
@@ -931,7 +957,6 @@ intonly:
 
 static int      pcLexerGet(pcLexer *L)
 {
-  int dummy;
 again:
   L->tokbuflen= 0;
   pcLexerSkipSpace(L);
@@ -1006,6 +1031,7 @@ int main(int argc, char **argv)
 {
   pcLexer *L;
   char *fn; int ln;
+  char **P;
   int q=0;
   L= pcLexerInit(argv[1], NULL, NULL);
   while(!q)
@@ -1015,6 +1041,9 @@ int main(int argc, char **argv)
   case tk_float: printf("float(%g)\n", L->token.flov); break;
   case tk_string: printf("string(%s)\n", L->token.data);  break;
   case tk_ident: printf("ident(%s)\n", L->token.data); break;
+  case tk_ref: printf("ref(");
+               for(P=L->token.refv;*P;P++) printf(".%s", *P); 
+               printf(")\n"); break;
   case tk_openc: printf("open-c\n"); break;
   case tk_closec: printf("close-c\n"); break;
   case tk_opens: printf("open-s\n"); break;
@@ -1092,9 +1121,15 @@ RELAPATH_SCOPE char *path_relative(char *fn, char *ref)
   while ((K= strstr(fn,"/./")))  memmove(K, K+2, strlen(K+2)+1); 
   while ((K= strstr(fn, "/../")))
   {
-    if (K==fn) { p= K; }
-          else { for(p=K-1;p>=fn && *p!='/';p--) ; 
-                 if (p<fn) { p++; K++; }             } // SIDENOTE1
+    if (K==fn)
+    {
+      p= K;
+    }
+    else
+    {
+      for(p=K-1;p>=fn && *p!='/';p--) ; 
+      if (p<fn) { p++; K++; }             
+    } // SIDENOTE1
     memmove(p, K+3, strlen(K+3)+1);
   }
   return fn;
@@ -1342,6 +1377,7 @@ static void pcFreeValue(pcValue *V)
   case pc_ident:    free(V->strv);         break;
   case pc_object:   pcFreeObject(V->objv); break;
   case pc_array:    pcFreeArray(V->arrv);  break;
+  case pc_ref:      free(V->refv);         break;
   }
 }
 
@@ -1404,6 +1440,7 @@ static int    pcParseValue(pcParser *P, pcValue *V)
   case tk_float:  V->type= pc_float; V->flov= L->token.flov; break;
   case tk_string: return pcParseStringValue(P, V, pc_string);
   case tk_ident:  return pcParseStringValue(P, V, pc_ident);
+  case tk_ref:    V->type= pc_ref;   V->refv= L->token.refv; break;
   case tk_error:  return pcPropagateError(P);
   default:        return pcParseError(P, "unrecognized value token");
   }
@@ -1459,7 +1496,6 @@ static int pcParserIncludeSingle(pcParser *P, pcValue *V)
 static int         pcParserInclude(pcParser *P, pcField *F)
 {
   int i, R;
-  pcValue *V;
   R= 0;
   if (F->nvalues==0) R= pcInvalidInclude(P, F->pos);
   for(i=0;!R && i<F->nvalues;i++) R= pcParserIncludeSingle(P, F->values+i);
@@ -1617,6 +1653,8 @@ void        pcCleanup()
 {
   pcCleanFileRecords();
 }
+
+void *__jaesun_unused []= { avl_remove };
 #endif
 
 
@@ -1630,12 +1668,14 @@ void pcParserPrintObject(pcObject *O);
 
 static void pcParserPrintValue(pcValue *V)
 {
+  char **P;
   switch(V->type)
   {
-  case pc_int:      printf("%ld", V->intv); break;
+  case pc_int:      printf("%lld", V->intv); break;
   case pc_float:    printf("%g", V->flov); break;
   case pc_string:   
   case pc_ident:    printf("%s", V->strv); break;
+  case pc_ref:      for(P=V->refv;*P;P++) printf(".%s", *P); break;
   case pc_object:   pcParserPrintObject(V->objv); break;
   case pc_array:    pcParserPrintArray(V->arrv);  break;
   }
@@ -1679,7 +1719,7 @@ void pcParserPrintArray(pcArray *A)
 int main(int argc, char **argv)
 {
   pcParser *P;
-  size_t i, nf;
+  size_t  nf;
   pcField *F;
 
   P= pcParserInit();
