@@ -25,8 +25,18 @@ typedef struct
   };
 } pcValue;
 
-typedef struct  { char *name;      uint64_t   pos;
-                  int   nvalues;   pcValue   *values;  } pcField;
+typedef struct  
+{ 
+  int nametype; // pc_ident or pc_ref
+  union {
+    char *name;      
+    char **ref;
+  };
+  uint64_t   pos;
+  int   nvalues;
+  pcValue   *values;
+} pcField;
+
 struct pcObject { int   nfields;   pcField   *fields;  };
 struct pcArray  { int   nvalues;   pcValue   *values;  };
 
@@ -1390,7 +1400,8 @@ static void pcFreeValues(int nv, pcValue *V)
 
 static void pcFreeField(pcField *F)
 {
-  free(F->name);
+  free(F->name); // this works also for ref because that thing
+                 // is also allocated as a single block
   pcFreeValues(F->nvalues, F->values);
 }
 
@@ -1457,11 +1468,12 @@ static int    pcParseField(pcParser *P, pcField *F)
   int       fail;
 
   L= P->lexer;
-  if (L->token.type!=tk_ident) 
+  if (L->token.type!=tk_ident && L->token.type!=tk_ref) 
      return pcParseError(P, "identifier expected at the head of declaration");
 
   B= obuf_new(sizeof(pcValue), 64);
-  F->name= strdup(L->token.data);
+  if (L->token.type==tk_ident) F->name= strdup(L->token.data);
+                          else F->ref= L->token.refv;
   F->pos= L->token.pos;
   pcLexerGet(L);
   fail= 0;
@@ -1471,8 +1483,7 @@ static int    pcParseField(pcParser *P, pcField *F)
   F->values= obuf_collect(B, &sz, 1);
   F->nvalues= sz;
 
-  if (fail) { pcFreeField(F);
-              return 1; }
+  if (fail) { pcFreeField(F); return 1; }
   pcLexerGet(L);
   return 0;
 }
