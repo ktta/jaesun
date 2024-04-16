@@ -1472,8 +1472,16 @@ static int    pcParseField(pcParser *P, pcField *F)
      return pcParseError(P, "identifier expected at the head of declaration");
 
   B= obuf_new(sizeof(pcValue), 64);
-  if (L->token.type==tk_ident) F->name= strdup(L->token.data);
-                          else F->ref= L->token.refv;
+  if (L->token.type==tk_ident) 
+  {
+    F->nametype= pc_ident;
+    F->name= strdup(L->token.data);
+  }
+  else
+  {
+    F->nametype= pc_ref;
+    F->ref= L->token.refv;
+  }
   F->pos= L->token.pos;
   pcLexerGet(L);
   fail= 0;
