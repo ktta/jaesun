@@ -50,6 +50,7 @@ void        pcFreeFields(int nfields, pcField *F);
 
 void        pcGetError  (pcParser *P,char **fn, int *ln, char **estr);
 void        pcGetPosData(uint64_t pos, char **fn, int *line);
+char       *pcRelativePath(uint64_t pos, const char *path);
 
 void        pcCleanup();
 
@@ -1671,6 +1672,12 @@ pcField      *pcParserFree(pcParser *P, size_t *nf)
 void        pcCleanup()
 {
   pcCleanFileRecords();
+}
+
+char       *pcRelativePath(uint64_t pos, const char *path)
+{
+  // FIXME in relapath
+  return path_relative((char*) path, pcFileName(pos>>32));
 }
 
 void *__jaesun_unused []= { avl_remove };
